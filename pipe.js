@@ -1,5 +1,5 @@
 /* Copyright 2017 Ronny Reichmann */
-/* PIPE, minimal, functional, monadic, promise-compatible streaming framework */
+/* PIPE, minimal, functional, backpressure, monadic, promise-compatible streaming framework */
 
 function processResultValue (result, callback) {
   if (result && result.then && result.catch) {

@@ -201,7 +201,7 @@ test('from iterable and forEach', done => {
       done()
     })
 })
-test('async push and forEach', done => {
+test('async emit next and forEach', done => {
   const allItems = [111, 222, 333]
   function asyncPush (resolve, reject) {
     let idx = 0
