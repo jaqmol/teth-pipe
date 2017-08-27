@@ -1,0 +1,23 @@
+{
+  "name": "teth-pipe",
+  "version": "0.0.2",
+  "description": "Promise-compatible map-reduce streaming lib",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest --runInBand"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://git"
+  },
+  "keywords": [
+    "Promise",
+    "streaming",
+    "reactive"
+  ],
+  "author": "Ronnny Reichmann",
+  "license": "MIT",
+  "devDependencies": {
+    "jest": "^20.0.4"
+  }
+}
