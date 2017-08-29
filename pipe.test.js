@@ -224,12 +224,18 @@ test('async emit next and forEach', done => {
       done()
     })
 })
-test('simple map with forEach', done => {
-  const iterable = [11, 22, 33, 44, 55, 66, 77]
-  pipe.from(iterable)
-    .map(item => item + 1000)
+test('heavy duty emit next and forEach', done => {
+  let idx = 0
+  function asyncPush (resolve, reject) {
+    const maxValue = 100000
+    return next => {
+      if (idx === maxValue) resolve()
+      else next(idx++)
+    }
+  }
+  pipe(asyncPush)
     .forEach(item => {
-      expect(iterable.indexOf(item - 1000)).not.toBe(-1)
+      expect(item - 1).not.toBe(idx)
     })
     .then(() => { done() })
     .catch(() => {
@@ -237,6 +243,19 @@ test('simple map with forEach', done => {
       done()
     })
 })
+// test('simple map with forEach', done => {
+//   const iterable = [11, 22, 33, 44, 55, 66, 77]
+//   pipe.from(iterable)
+//     .map(item => item + 1000)
+//     .forEach(item => {
+//       expect(iterable.indexOf(item - 1000)).not.toBe(-1)
+//     })
+//     .then(() => { done() })
+//     .catch(() => {
+//       expect(false).toBe(true)
+//       done()
+//     })
+// })
 // test('multiple map with forEach', done => {
 //   const iterable = [11, 22, 33, 44, 55, 66, 77]
 //   pipe.from(iterable)
@@ -299,19 +318,19 @@ test('simple map with forEach', done => {
 //       done()
 //     })
 // })
-test('reduce with resolve', done => {
-  const input = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-  pipe.from(input)
-    .reduce((s, n) => s + n, 0)
-    .then(sum => {
-      expect(sum).toBe(45)
-      done()
-    })
-    .catch(() => {
-      expect(false).toBe(true)
-      done()
-    })
-})
+// test('reduce with resolve', done => {
+//   const input = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+//   pipe.from(input)
+//     .reduce((s, n) => s + n, 0)
+//     .then(sum => {
+//       expect(sum).toBe(45)
+//       done()
+//     })
+//     .catch(() => {
+//       expect(false).toBe(true)
+//       done()
+//     })
+// })
 // test('async reduce with resolve', done => {
 //   const input = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 //   pipe.from(input)

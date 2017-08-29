@@ -16,209 +16,140 @@ function processResultValue (result, callback) {
   } else callback(null, result)
 }
 
-function handleRejectError (rejectState, error) {
-  if (rejectState.callback) rejectState.callback(error)
-  else rejectState.error = error
-}
-function handleRejectCallback (rejectState, callback) {
-  if (rejectState.error) callback(rejectState.error)
-  else rejectState.callback = callback
-}
-
-function handleResolveValue (resolveState, value) {
-  if (resolveState.callback) resolveState.callback(value)
-  else resolveState.value = value
-}
-function handleResolveCallback (resolveState, callback) {
-  if (resolveState.value) callback(resolveState.value)
-  else resolveState.callback = callback
-}
-
-function generateEmitter (generateFn, resolveState, rejectState, emitState) {
-  let performEmit, onEmitCallback
-  function performEmitFn (nextCallback) {
-    if (!emitState.isFinished) {
-      emitState.emitFn(nextResult => {
-        processResultValue(nextResult, (error, nextValue) => {
-          if (error) {
-            handleRejectError(rejectState, error)
-            emitState.isFinished = true
-          } else nextCallback(nextValue, emitState.isFinished)
-        })
-      })
+function composeStatePistons () {
+  function piston () {
+    let value, callback, loadRelease, callbackRelease, _didLoad
+    const release = () => callback(value)
+    const nilfn = () => {}
+    const composit = {
+      load: loadValue => {
+        value = loadValue
+        callbackRelease = release
+        loadRelease()
+        _didLoad = true
+        return composit
+      },
+      fire: fireCallback => {
+        callback = fireCallback
+        loadRelease = release
+        callbackRelease()
+        return composit
+      },
+      didLoad: () => _didLoad,
+      reset: () => {
+        value = undefined
+        callback = undefined
+        loadRelease = nilfn
+        callbackRelease = nilfn
+        _didLoad = false
+        return composit
+      }
     }
+    return Object.freeze(composit.reset())
   }
-  function initEmitStateFn (nextCallback) {
-    onEmitCallback()
-    const resolveFn = result => {
-      processResultValue(result, (error, value) => {
-        if (error) handleRejectError(rejectState, error)
-        else handleResolveValue(resolveState, value)
-        emitState.isFinished = true
-      })
-    }
-    const rejectFn = error => {
-      handleRejectError(rejectState, error)
-      emitState.isFinished = true
-    }
-    emitState.emitFn = generateFn(resolveFn, resolveState, rejectFn)
-    performEmit = performEmitFn
-    setTimeout(() => performEmit(nextCallback), 0)
-  }
-  performEmit = initEmitStateFn
   return Object.freeze({
-    onEmit: callback => { onEmitCallback = callback },
-    callback: nextCallback => performEmit(nextCallback)
+    resolve: piston(),
+    reject: piston()
   })
 }
-function generateResolver (generateFn, rejectState, resolveState, onEmit) {
-  let performResolve
-  function nonEmittingPerformResolve (thenCallback) {
-    const resolveFn = result => {
-      processResultValue(result, (error, value) => {
-        if (error) handleRejectError(rejectState, error)
-        else thenCallback(value)
+
+function generatorStream (generateFn) {
+  const statePistons = composeStatePistons()
+  let emitCallback, performEmit, performResolve
+  const emitter = {
+    requestValue: nextCallback => {
+      emitCallback(value => {
+        nextCallback(value, statePistons.resolve.didLoad())
       })
+    },
+    initialize: nextCallback => {
+      performResolve = statePistons.resolve.fire
+      const resolveFn = statePistons.resolve.load
+      const rejectFn = statePistons.reject.load
+      emitCallback = generateFn(resolveFn, rejectFn)
+      performEmit = emitter.requestValue
+      performEmit(nextCallback)
     }
-    const rejectFn = error => {
-      handleRejectError(rejectState, error)
+  }
+  const resolveThenable = resolveCallback => {
+    const resolveFn = value => {
+      statePistons.resolve.load(value).fire(resolveCallback)
     }
+    const rejectFn = statePistons.reject.load
     generateFn(resolveFn, rejectFn)
   }
-  function emittingPerformResolve (resolveCallback) {
-    handleResolveCallback(resolveState, resolveCallback)
-  }
-  performResolve = nonEmittingPerformResolve
-  return Object.freeze({
-    onEmitCallback: () => { performResolve = emittingPerformResolve },
-    callback: resolveCallback => performResolve(resolveCallback)
-  })
-}
-function generateMetaFlow (generateFn) {
-  const resolveState = {}
-  const rejectState = {}
-  const emitState = {}
-  const resolver = generateResolver(generateFn, rejectState, resolveState)
-  const emitter = generateEmitter(generateFn, resolveState, rejectState, emitState)
-  emitter.onEmit(resolver.onEmitCallback)
+  performEmit = emitter.initialize
+  performResolve = resolveThenable
   const composit = {
-    emit: emitter.callback,
-    resolve: resolver.callback,
-    reject: rejectCallback => {
-      handleRejectCallback(rejectState, rejectCallback)
-    }
+    emit: nextCallback => performEmit(nextCallback),
+    resolve: resolveCallback => performResolve(resolveCallback),
+    reject: statePistons.reject.fire
   }
   return Object.freeze(composit)
 }
 
-function composeThenFn (previousMetaFlow, rejectState) {
+function composeThenFn (upstream, statePistons) {
   return thenCallback => {
-    const resolveState = {}
-    previousMetaFlow.resolve(previousValue => {
+    upstream.resolve(previousValue => {
       const result = thenCallback(previousValue)
       processResultValue(result, (error, value) => {
-        if (error) handleRejectError(rejectState, error)
-        else handleResolveValue(resolveState, value)
+        if (error) statePistons.reject.load(value)
+        else statePistons.resolve.load(value)
       })
     })
-    const metaFlow = {
-      resolve: metaResolveCallback => {
-        handleResolveCallback(resolveState, metaResolveCallback)
-      },
-      reject: metaRejectCallback => {
-        handleRejectCallback(rejectState, metaRejectCallback)
-        previousMetaFlow.reject(metaRejectCallback)
+    const stream = {
+      resolve: statePistons.resolve.fire,
+      reject: rejectCallback => {
+        statePistons.reject.fire(rejectCallback)
+        upstream.reject(rejectCallback)
       }
     }
-    return pipe(undefined, Object.freeze(metaFlow))
+    return pipe(undefined, Object.freeze(stream))
   }
 }
 
-function composeForEachFn (previousMetaFlow) {
-  return forEachCallback => {
-    const retrieveNext = () => {
-      previousMetaFlow.emit((value, isFinished) => {
-        forEachCallback(value)
-        if (!isFinished) retrieveNext()
-      })
-    }
-    retrieveNext()
-    const metaFlow = {
-      resolve: previousMetaFlow.resolve,
-      reject: previousMetaFlow.reject
-    }
-    return pipe(undefined, Object.freeze(metaFlow))
+function emitUntilFinished (upstream, statePistons, callback) {
+  // TODO: The stability of this solution needs to be tested in different browsers
+  //       Alternatively use setTimeout(emitNext, 0) in each recursion -> much slower
+  function isCallStackSizeExceededError (error) {
+    const msg = error.message.toLowerCase()
+    return (msg.indexOf('maximum') > -1) &&
+      (msg.indexOf('call') > -1) &&
+      (msg.indexOf('stack') > -1) &&
+      (msg.indexOf('size') > -1) &&
+      (msg.indexOf('exceeded') > -1)
   }
-}
-function composeReduceFn (previousMetaFlow) {
-  return (reduceCallback, accumulator) => {
-    const retrieveNext = () => {
-      previousMetaFlow.emit((value, isFinished) => {
-        accumulator = reduceCallback(accumulator, value)
-        if (!isFinished) retrieveNext()
-      })
-    }
-    retrieveNext()
-    const metaFlow = {
-      resolve: resolveCallback => previousMetaFlow.resolve(
-        () => resolveCallback(accumulator)),
-      reject: previousMetaFlow.reject
-    }
-    return pipe(undefined, Object.freeze(metaFlow))
+  function emitNext () {
+    upstream.emit((value, didFinish) => {
+      callback(value)
+      if (!didFinish) {
+        try {
+          emitNext()
+        } catch (error) {
+          if (isCallStackSizeExceededError(error)) setTimeout(emitNext, 0)
+          else statePistons.reject.load(error)
+        }
+      }
+    })
   }
+  emitNext()
 }
 
-function flowPipe (previousMetaFlow) {
-  const rejectState = {}
+function conduit (upstream) {
+  const statePistons = composeStatePistons()
   const composit = {
-    forEach: composeForEachFn(previousMetaFlow),
-    map: mapCallback => {
-      let emitState = {}
-      const retrieveNext = () => {
-        previousMetaFlow.emit((value, isFinished) => {
-          const result = mapCallback(value)
-          processResultValue(result, (error, value) => {
-            if (error) handleRejectError(rejectState, error)
-            else {
-              if (emitState.nextCallback) {
-                console.log('previousMetaFlow.emit -> emitState.nextCallback')
-                emitState.nextCallback(value)
-                emitState = {}
-                if (!isFinished) retrieveNext()
-              } else {
-                console.log('previousMetaFlow.emit -> emitState.nextValue')
-                emitState.nextValue = value
-                emitState.isFinished = isFinished
-              }
-            }
-          })
-        })
+    forEach: forEachCallback => {
+      emitUntilFinished(upstream, statePistons, forEachCallback)
+      const stream = {
+        resolve: upstream.resolve,
+        reject: upstream.reject
       }
-      retrieveNext()
-      const metaFlow = {
-        emit: nextCallback => {
-          if (emitState.nextValue) {
-            console.log('emit: nextCallback -> emitState.nextValue')
-            nextCallback(emitState.nextValue)
-            if (emitState.isFinished) {
-              emitState = {}
-              retrieveNext()
-            }
-          } else {
-            console.log('emit: nextCallback -> emitState.nextCallback')
-            emitState.nextCallback = nextCallback
-          }
-        },
-        resolve: previousMetaFlow.resolve,
-        reject: previousMetaFlow.reject
-      }
-      return pipe(undefined, Object.freeze(metaFlow))
+      return pipe(undefined, Object.freeze(stream))
     },
-    reduce: composeReduceFn(previousMetaFlow),
-    then: composeThenFn(previousMetaFlow, rejectState),
+    then: composeThenFn(upstream, statePistons),
     catch: catchCallback => {
-      handleRejectCallback(rejectState, catchCallback)
-      previousMetaFlow.reject(catchCallback)
+      statePistons.reject.fire(catchCallback)
+      upstream.reject(catchCallback)
     }
   }
   return Object.freeze(composit)
@@ -226,8 +157,8 @@ function flowPipe (previousMetaFlow) {
 
 function pipe (generateFn) {
   return generateFn
-    ? pipe(undefined, generateMetaFlow(generateFn))
-    : flowPipe(arguments[1])
+    ? pipe(undefined, generatorStream(generateFn))
+    : conduit(arguments[1])
 }
 
 pipe.resolve = value => {
