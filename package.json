@@ -1,6 +1,6 @@
 {
   "name": "teth-pipe",
-  "version": "0.0.2",
+  "version": "0.7.0",
   "description": "Promise-compatible map-reduce streaming lib",
   "main": "index.js",
   "scripts": {

@@ -1,164 +1,251 @@
 /* Copyright 2017 Ronny Reichmann */
 /* PIPE, minimal, functional, monadic, promise-compatible streaming framework with backpressure. */
 
-function processResultValue (result, callback) {
+function resolveResult (result, successCb, errorCb) {
   if (result && result.then && result.catch) {
-    // if (result.forEach) {
-    //   result
-    //     .forEach(value => { callback(undefined, value) })
-    //     .then(value => { callback(undefined, value) })
-    //     .catch(error => { callback(error) })
-    // } else {
-    result
-      .then(value => { callback(null, value) })
-      .catch(error => { callback(error) })
-    // }
-  } else callback(null, result)
+    result.then(successCb).catch(errorCb)
+  } else successCb(result)
 }
 
-function composeStatePistons () {
-  function piston () {
-    let value, callback, loadRelease, callbackRelease, _didLoad
-    const release = () => callback(value)
-    const nilfn = () => {}
-    const composit = {
-      load: loadValue => {
-        value = loadValue
-        callbackRelease = release
-        loadRelease()
-        _didLoad = true
-        return composit
-      },
-      fire: fireCallback => {
-        callback = fireCallback
-        loadRelease = release
-        callbackRelease()
-        return composit
-      },
-      didLoad: () => _didLoad,
-      reset: () => {
-        value = undefined
-        callback = undefined
-        loadRelease = nilfn
-        callbackRelease = nilfn
-        _didLoad = false
-        return composit
+function composeBaseTransition (previousTransition) {
+  let _nextMessage, _nextMessageCallback, _onMessageCallback, _onDispatchFinished
+  let _isDeferred = true
+  function dispatch () {
+    if (_nextMessage && _nextMessageCallback) {
+      _nextMessageCallback(_nextMessage)
+      _nextMessage = null
+      if (_onDispatchFinished) {
+        _onDispatchFinished()
+        _onDispatchFinished = null
       }
     }
-    return Object.freeze(composit.reset())
   }
-  return Object.freeze({
-    resolve: piston(),
-    reject: piston()
-  })
-}
-
-function generatorStream (generateFn) {
-  const statePistons = composeStatePistons()
-  let emitCallback, performEmit, performResolve
-  const emitter = {
-    requestValue: nextCallback => {
-      emitCallback(value => {
-        nextCallback(value, statePistons.resolve.didLoad())
+  function expectNext () {
+    if (_isDeferred) {
+      previousTransition.requestNextMessage(message => {
+        _onMessageCallback(message.type, message.value)
+        if (message.type === 'resolve') _isDeferred = false
+        else if (message.type === 'reject') _isDeferred = false
       })
-    },
-    initialize: nextCallback => {
-      performResolve = statePistons.resolve.fire
-      const resolveFn = statePistons.resolve.load
-      const rejectFn = statePistons.reject.load
-      emitCallback = generateFn(resolveFn, rejectFn)
-      performEmit = emitter.requestValue
-      performEmit(nextCallback)
     }
   }
-  const resolveThenable = resolveCallback => {
-    const resolveFn = value => {
-      statePistons.resolve.load(value).fire(resolveCallback)
-    }
-    const rejectFn = statePistons.reject.load
-    generateFn(resolveFn, rejectFn)
-  }
-  performEmit = emitter.initialize
-  performResolve = resolveThenable
   const composit = {
-    emit: nextCallback => performEmit(nextCallback),
-    resolve: resolveCallback => performResolve(resolveCallback),
-    reject: statePistons.reject.fire
+    onMessage: callback => {
+      _onMessageCallback = callback
+    },
+    expectNext: () => {
+      setTimeout(expectNext, 0)
+    },
+    nextDispatch: (nextMessage, finishedCb) => {
+      _nextMessage = nextMessage
+      dispatch()
+      _onDispatchFinished = finishedCb
+    },
+    requestNextMessage: nextMessageCallback => {
+      _nextMessageCallback = nextMessageCallback
+      expectNext()
+      dispatch()
+    }
   }
   return Object.freeze(composit)
 }
 
-function composeThenFn (upstream, statePistons) {
-  return thenCallback => {
-    upstream.resolve(previousValue => {
-      const result = thenCallback(previousValue)
-      processResultValue(result, (error, value) => {
-        if (error) statePistons.reject.load(value)
-        else statePistons.resolve.load(value)
-      })
-    })
-    const stream = {
-      resolve: statePistons.resolve.fire,
-      reject: rejectCallback => {
-        statePistons.reject.fire(rejectCallback)
-        upstream.reject(rejectCallback)
+function composeReduceTransition (previousTransition, reduceCallback, initialAccumulator) {
+  let accumulator = initialAccumulator
+  const baseTransition = composeBaseTransition(previousTransition)
+  baseTransition.onMessage((type, value) => {
+    if (type === 'emit') {
+      try {
+        const result = reduceCallback(accumulator, value)
+        resolveResult(result, nextAccumulator => {
+          accumulator = nextAccumulator
+          baseTransition.expectNext()
+        }, error => {
+          baseTransition.nextDispatch({ type: 'reject', value: error })
+        })
+      } catch (error) {
+        baseTransition.nextDispatch({ type: 'reject', value: error })
       }
+    } else if (type === 'resolve') {
+      baseTransition.nextDispatch({ type: 'resolve', value: accumulator })
+    } else {
+      baseTransition.nextDispatch({ type, value })
     }
-    return pipe(undefined, Object.freeze(stream))
-  }
+  })
+  return Object.freeze({
+    requestNextMessage: baseTransition.requestNextMessage
+  })
 }
 
-function emitUntilFinished (upstream, statePistons, callback) {
-  // TODO: The stability of this solution needs to be tested in different browsers
-  //       Alternatively use setTimeout(emitNext, 0) in each recursion -> much slower
-  function isCallStackSizeExceededError (error) {
-    const msg = error.message.toLowerCase()
-    return (msg.indexOf('maximum') > -1) &&
-      (msg.indexOf('call') > -1) &&
-      (msg.indexOf('stack') > -1) &&
-      (msg.indexOf('size') > -1) &&
-      (msg.indexOf('exceeded') > -1)
-  }
-  function emitNext () {
-    upstream.emit((value, didFinish) => {
-      callback(value)
-      if (!didFinish) {
-        try {
-          emitNext()
-        } catch (error) {
-          if (isCallStackSizeExceededError(error)) setTimeout(emitNext, 0)
-          else statePistons.reject.load(error)
-        }
+function composeFilterTransition (previousTransition, filterCallback) {
+  const baseTransition = composeBaseTransition(previousTransition)
+  baseTransition.onMessage((type, value) => {
+    if (type === 'emit') {
+      try {
+        const result = filterCallback(value)
+        resolveResult(result, dispatchMessage => {
+          if (dispatchMessage) {
+            baseTransition.nextDispatch({ type, value }, baseTransition.expectNext)
+          } else {
+            baseTransition.expectNext()
+          }
+        }, error => {
+          baseTransition.nextDispatch({ type: 'reject', value: error })
+        })
+      } catch (error) {
+        baseTransition.nextDispatch({ type: 'reject', value: error })
       }
-    })
-  }
-  emitNext()
+    } else {
+      baseTransition.nextDispatch({ type, value })
+    }
+  })
+  return Object.freeze({
+    requestNextMessage: baseTransition.requestNextMessage
+  })
 }
 
-function conduit (upstream) {
-  const statePistons = composeStatePistons()
+function composeMapTransition (previousTransition, mapCallback) {
+  const baseTransition = composeBaseTransition(previousTransition)
+  baseTransition.onMessage((type, value) => {
+    if (type === 'emit') {
+      try {
+        const result = mapCallback(value)
+        resolveResult(result, value => {
+          baseTransition.nextDispatch({ type: 'emit', value }, baseTransition.expectNext)
+        }, error => {
+          baseTransition.nextDispatch({ type: 'reject', value: error })
+        })
+      } catch (error) {
+        baseTransition.nextDispatch({ type: 'reject', value: error })
+      }
+    } else {
+      baseTransition.nextDispatch({ type, value })
+    }
+  })
+  return Object.freeze({
+    requestNextMessage: baseTransition.requestNextMessage
+  })
+}
+
+function composeForEachTransition (previousTransition, forEachCallback) {
+  const baseTransition = composeBaseTransition(previousTransition)
+  baseTransition.onMessage((type, value) => {
+    if (type === 'emit') {
+      forEachCallback(value)
+      baseTransition.expectNext()
+    } else if (type === 'resolve') {
+      baseTransition.nextDispatch({ type, value })
+    } else {
+      baseTransition.nextDispatch({ type, value })
+    }
+  })
+  return Object.freeze({
+    requestNextMessage: baseTransition.requestNextMessage
+  })
+}
+
+function composeThenTransition (previousTransition, thenCallback) {
+  let _nextMessage, _nextMessageCallback
+  function dispatch () {
+    if (_nextMessage && _nextMessageCallback) {
+      _nextMessageCallback(_nextMessage)
+      _nextMessage = null
+    }
+  }
+  previousTransition.requestNextMessage(message => {
+    if (message.type === 'resolve') {
+      try {
+        const result = thenCallback(message.value)
+        resolveResult(result, value => {
+          _nextMessage = { type: 'resolve', value }
+          dispatch()
+        }, error => {
+          _nextMessage = { type: 'reject', value: error }
+          dispatch()
+        })
+      } catch (error) {
+        _nextMessage = { type: 'reject', value: error }
+        dispatch()
+      }
+    } else {
+      _nextMessage = message
+      dispatch()
+    }
+  })
   const composit = {
-    forEach: forEachCallback => {
-      emitUntilFinished(upstream, statePistons, forEachCallback)
-      const stream = {
-        resolve: upstream.resolve,
-        reject: upstream.reject
+    requestNextMessage: nextMessageCallback => {
+      _nextMessageCallback = nextMessageCallback
+      dispatch()
+    }
+  }
+  return Object.freeze(composit)
+}
+
+function composeCatchTransition (previousTransition, catchCallback) {
+  previousTransition.requestNextMessage(message => {
+    if (message.type === 'reject') {
+      catchCallback(message.value)
+    }
+  })
+}
+
+function composeGenerateTransition (generateFn) {
+  let _nextMessage, _nextMessageCallback
+  function dispatch () {
+    if (_nextMessage && _nextMessageCallback) {
+      _nextMessageCallback(_nextMessage)
+      _nextMessage = null
+    }
+  }
+  let perform = () => {
+    const emitFn = generateFn(
+      value => {
+        _nextMessage = { type: 'resolve', value }
+        dispatch()
+      },
+      error => {
+        _nextMessage = { type: 'reject', value: error }
+        dispatch()
       }
-      return pipe(undefined, Object.freeze(stream))
-    },
-    then: composeThenFn(upstream, statePistons),
-    catch: catchCallback => {
-      statePistons.reject.fire(catchCallback)
-      upstream.reject(catchCallback)
+    )
+    if (emitFn) {
+      perform = () => {
+        emitFn(value => {
+          _nextMessage = { type: 'emit', value }
+          dispatch()
+        })
+      }
+      perform()
+    }
+  }
+  const composit = {
+    requestNextMessage: nextMessageCallback => {
+      perform()
+      _nextMessageCallback = nextMessageCallback
+      dispatch()
     }
   }
   return Object.freeze(composit)
 }
 
 function pipe (generateFn) {
-  return generateFn
-    ? pipe(undefined, generatorStream(generateFn))
-    : conduit(arguments[1])
+  if (generateFn) return pipe(undefined, composeGenerateTransition(generateFn))
+  const previousTransition = arguments[1]
+  function composeOperatorFn (composeTransition) {
+    return (callback, addition) => pipe(undefined, composeTransition(
+      previousTransition, callback, addition))
+  }
+  const composit = {
+    reduce: composeOperatorFn(composeReduceTransition),
+    filter: composeOperatorFn(composeFilterTransition),
+    map: composeOperatorFn(composeMapTransition),
+    forEach: composeOperatorFn(composeForEachTransition),
+    then: composeOperatorFn(composeThenTransition),
+    catch: catchCallback => {
+      composeCatchTransition(previousTransition, catchCallback)
+    }
+  }
+  return Object.freeze(composit)
 }
 
 pipe.resolve = value => {
@@ -226,6 +313,73 @@ pipe.from = collection => {
       else next(collection[idx++])
     }
   })
+}
+
+pipe.buffer = function (size) {
+  size = arguments.length === 0 ? Infinity : size
+  size = size <= 0 ? 1 : size
+  let resolveCallback, rejectCallback, emitCallback
+  let messageBuffer = []
+  function handleNextMessage () {
+    if (messageBuffer.length === 0) return
+    const msg = messageBuffer[0]
+    if (msg.type === 'emit') {
+      if (emitCallback) {
+        messageBuffer.splice(0, 1)
+        emitCallback(msg.value)
+        emitCallback = null
+      }
+    } else if (msg.type === 'resolve') {
+      messageBuffer.splice(0, 1)
+      resolveCallback(msg.value)
+    } else if (msg.type === 'reject') {
+      messageBuffer.splice(0, 1)
+      rejectCallback(msg.value)
+    }
+  }
+  function resizeMessageBuffer () {
+    if (size === Infinity) return
+    let workBuffer = [].concat(messageBuffer)
+    workBuffer.reverse()
+    let count = 0
+    workBuffer = workBuffer.filter(msg => {
+      if (msg.type === 'emit') {
+        if (count < size) {
+          count += 1
+          return true
+        } else return false
+      } else return true
+    })
+    workBuffer.reverse()
+    messageBuffer = workBuffer
+  }
+  const _pipe = pipe((resolve, reject) => {
+    resolveCallback = resolve
+    rejectCallback = reject
+    return nextCb => {
+      emitCallback = nextCb
+      handleNextMessage()
+    }
+  })
+  const composit = {
+    emit: value => {
+      messageBuffer.push({ type: 'emit', value })
+      resizeMessageBuffer()
+      handleNextMessage()
+    },
+    resolve: value => {
+      messageBuffer.push({ type: 'resolve', value })
+      resizeMessageBuffer()
+      handleNextMessage()
+    },
+    reject: value => {
+      messageBuffer.push({ type: 'reject', value })
+      resizeMessageBuffer()
+      handleNextMessage()
+    },
+    pipe: _pipe
+  }
+  return Object.freeze(composit)
 }
 
 pipe.wrap = workerFn => {

@@ -2,6 +2,8 @@
 /* global test expect */
 
 const pipe = require('./pipe')
+const runHeavyDutyTests = false
+// IMPORTANT TODO: Rejection and error catching needs to be tested more thoroughly in all partial concerns
 
 test('singular synchronous pipe', done => {
   pipe((resolve, reject) => { resolve(42) })
@@ -46,6 +48,25 @@ test('pipe reject', done => {
       done()
     })
 })
+test('pipe error', done => {
+  const e = new Error('Pipe test error')
+  pipe((resolve, reject) => { resolve(1) })
+    .then(result => result + 1)
+    .then(result => result + 2)
+    .then(result => {
+      throw e
+    })
+    .then(result => result + 3)
+    .then(result => result + 4)
+    .then(result => {
+      expect(false).toBe(true)
+      done()
+    })
+    .catch(error => {
+      expect(error).toBe(e)
+      done()
+    })
+})
 test('then return pipe', done => {
   pipe(resolve => { resolve(1) })
     .then(result => pipe(resolve => {
@@ -59,6 +80,10 @@ test('then return pipe', done => {
     }))
     .then(result => {
       expect(result).toBe(7)
+      done()
+    })
+    .catch(err => {
+      expect(err).toBe(null)
       done()
     })
 })
@@ -187,12 +212,14 @@ test('resolve with undefined value', done => {
   })
 })
 test('from iterable and forEach', done => {
-  const iterable = [11, 22, 33, 44, 55, 66, 77]
+  const iterable = [1, 2, 3, 4, 5, 6, 7]
+  let sum = 0
   pipe.from(iterable)
-    .forEach(item => {
-      expect(iterable.indexOf(item)).not.toBe(-1)
+    .forEach(num => {
+      sum += num
     })
-    .then(value => {
+    .then(() => {
+      expect(sum).toBe(28)
       done()
     })
     .catch(e => {
@@ -202,7 +229,7 @@ test('from iterable and forEach', done => {
     })
 })
 test('async emit next and forEach', done => {
-  const allItems = [111, 222, 333]
+  const allItems = [1, 2, 3, 4, 5, 6, 7]
   function asyncPush (resolve, reject) {
     let idx = 0
     let duration = 7
@@ -214,28 +241,101 @@ test('async emit next and forEach', done => {
       }
     }
   }
+  let sum = 0
   pipe(asyncPush)
-    .forEach(item => {
-      expect(allItems.indexOf(item)).not.toBe(-1)
+    .forEach(num => {
+      sum += num
     })
-    .then(() => { done() })
+    .then(() => {
+      expect(sum).toBe(28)
+      done()
+    })
     .catch(() => {
       expect(false).toBe(true)
       done()
     })
 })
-test('heavy duty emit next and forEach', done => {
-  let idx = 0
-  function asyncPush (resolve, reject) {
-    const maxValue = 100000
-    return next => {
-      if (idx === maxValue) resolve()
-      else next(idx++)
+if (runHeavyDutyTests) {
+  test('heavy duty emit next and forEach', done => {
+    let idx = 0
+    function asyncPush (resolve, reject) {
+      const maxValue = 1000
+      return next => {
+        if (idx === maxValue) resolve()
+        else next(idx++)
+      }
     }
-  }
-  pipe(asyncPush)
+    pipe(asyncPush)
+      .forEach(item => {
+        expect(item - 1).not.toBe(idx)
+      })
+      .then(() => { done() })
+      .catch(error => {
+        console.error(error)
+        expect(false).toBe(true)
+        done()
+      })
+  })
+}
+test('simple map with forEach', done => {
+  const iterable = [1, 2, 3, 4, 5, 6, 7]
+  let sum = 0
+  pipe.from(iterable)
+    .map(num => num * 10)
+    .forEach(num => {
+      sum += num
+    })
+    .then(() => {
+      expect(sum).toBe(280)
+      done()
+    })
+    .catch(error => {
+      console.error(error)
+      expect(false).toBe(true)
+      done()
+    })
+})
+test('multiple map with forEach', done => {
+  const iterable = [1, 2, 3, 4, 5, 6, 7]
+  let sum = 0
+  pipe.from(iterable)
+    .map(num => {
+      // console.log('1st MAP NUM:', num * 10)
+      return num * 10
+    })
+    .map(num => {
+      // console.log('2nd MAP NUM:', num * 10)
+      return num * 10
+    })
+    .map(num => {
+      // console.log('3rd MAP NUM:', num * 10)
+      return num * 10
+    })
+    .forEach(num => {
+      // console.log('NUM:', num)
+      sum += num
+    })
+    .then(() => {
+      expect(sum).toBe(28000)
+      done()
+    })
+    .catch(error => {
+      console.error(error)
+      expect(false).toBe(true)
+      done()
+    })
+})
+test('async map with forEach', done => {
+  const iterable = [11, 22, 33, 44, 55, 66, 77]
+  pipe.from(iterable)
+    .map(item => pipe(resolve => {
+      setTimeout(() => { resolve(item + 3) }, 3)
+    }))
+    .map(item => pipe(resolve => {
+      setTimeout(() => { resolve(item + 6) }, 5)
+    }))
     .forEach(item => {
-      expect(item - 1).not.toBe(idx)
+      expect(iterable.indexOf(item - 9)).not.toBe(-1)
     })
     .then(() => { done() })
     .catch(() => {
@@ -243,187 +343,140 @@ test('heavy duty emit next and forEach', done => {
       done()
     })
 })
-// test('simple map with forEach', done => {
-//   const iterable = [11, 22, 33, 44, 55, 66, 77]
-//   pipe.from(iterable)
-//     .map(item => item + 1000)
-//     .forEach(item => {
-//       expect(iterable.indexOf(item - 1000)).not.toBe(-1)
-//     })
-//     .then(() => { done() })
-//     .catch(() => {
-//       expect(false).toBe(true)
-//       done()
-//     })
-// })
-// test('multiple map with forEach', done => {
-//   const iterable = [11, 22, 33, 44, 55, 66, 77]
-//   pipe.from(iterable)
-//     .map(item => item + 1000)
-//     .map(item => item - 25)
-//     .forEach(item => {
-//       expect(iterable.indexOf(item - (1000 - 25))).not.toBe(-1)
-//     })
-//     .then(() => { done() })
-//     .catch(() => {
-//       expect(false).toBe(true)
-//       done()
-//     })
-// })
-// test('async map with forEach', done => {
-//   const iterable = [11, 22, 33, 44, 55, 66, 77]
-//   pipe.from(iterable)
-//     .map(item => pipe(resolve => {
-//       setTimeout(() => { resolve(item + 1000) }, 3)
-//     }))
-//     .map(item => pipe(resolve => {
-//       setTimeout(() => { resolve(item - 25) }, 5)
-//     }))
-//     .forEach(item => {
-//       expect(iterable.indexOf(item - (1000 - 25))).not.toBe(-1)
-//     })
-//     .then(() => { done() })
-//     .catch(() => {
-//       expect(false).toBe(true)
-//       done()
-//     })
-// })
-// test('filter with forEach', done => {
-//   const input = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-//   const output = [1, 3, 5, 7, 9]
-//   pipe.from(input)
-//     .filter(item => Math.abs(item % 2) === 1)
-//     .forEach(item => {
-//       expect(output.indexOf(item)).not.toBe(-1)
-//     })
-//     .then(() => { done() })
-//     .catch(() => {
-//       expect(false).toBe(true)
-//       done()
-//     })
-// })
-// test('async filter with forEach', done => {
-//   const input = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-//   const output = [1, 3, 5, 7, 9]
-//   pipe.from(input)
-//     .filter(item => pipe(resolve => {
-//       setTimeout(() => { resolve(Math.abs(item % 2) === 1) }, 3)
-//     }))
-//     .forEach(item => {
-//       expect(output.indexOf(item)).not.toBe(-1)
-//     })
-//     .then(() => { done() })
-//     .catch(() => {
-//       expect(false).toBe(true)
-//       done()
-//     })
-// })
-// test('reduce with resolve', done => {
-//   const input = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-//   pipe.from(input)
-//     .reduce((s, n) => s + n, 0)
-//     .then(sum => {
-//       expect(sum).toBe(45)
-//       done()
-//     })
-//     .catch(() => {
-//       expect(false).toBe(true)
-//       done()
-//     })
-// })
-// test('async reduce with resolve', done => {
-//   const input = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-//   pipe.from(input)
-//     .reduce((s, n) => pipe((resolve, reject) => {
-//       setTimeout(() => { resolve(s + n) }, 11)
-//     }), 0)
-//     .then(sum => {
-//       expect(sum).toBe(45)
-//       done()
-//     })
-//     .catch(() => {
-//       expect(false).toBe(true)
-//       done()
-//     })
-// })
-// test('complex streaming with resolve', done => {
-//   const inputA = [2, 4, 6, 8, 10]
-//   const inputB = [1, 3, 5, 7, 9]
-//   function getSimpleNumbers () {
-//     return pipe((resolve, reject, push) => {
-//       inputA.forEach(push)
-//       resolve()
-//     })
-//   }
-//   function makeObjectLiterals (sum) {
-//     return pipe((resolve, reject, push) => {
-//       inputB.forEach(num => { push({ sum, num }) })
-//       resolve()
-//     })
-//   }
-//   getSimpleNumbers()
-//     .reduce((s, n) => s + n, 0)
-//     .then(sum => {
-//       return makeObjectLiterals(sum)
-//         .map(o => Object.assign(o, {num: o.num + 1}))
-//     })
-//     .map(({sum, num}) => sum * num)
-//     .reduce((s, n) => s + n, 0)
-//     .then(sum => {
-//       expect(sum).toBe(900)
-//       done()
-//     })
-//     .catch(() => {
-//       expect(false).toBe(true)
-//       done()
-//     })
-// })
-// test('debounce', done => {
-//   const allDelays = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233]
-//   function generateEvents () {
-//     return pipe((resolve, reject, push) => {
-//       while (allDelays.length) {
-//         const counter = allDelays.length
-//         const nextDelay = allDelays.splice(0, 1)[0]
-//         const shouldResolve = allDelays.length === 0
-//         setTimeout(() => {
-//           push({date: Date.now(), counter})
-//           if (shouldResolve) resolve()
-//         }, nextDelay)
-//       }
-//     })
-//   }
-//   const arrivalTimes = []
-//   const debounceDelay = 15
-//   generateEvents()
-//     .debounce(debounceDelay)
-//     .forEach(event => {
-//       expect(event.date).toBeDefined()
-//       expect(event.counter).toBeDefined()
-//       arrivalTimes.push(Date.now())
-//     })
-//     .then(() => {
-//       const allDifferences = []
-//       for (var i = 1; i < arrivalTimes.length; i++) {
-//         const a = arrivalTimes[i]
-//         const b = arrivalTimes[i - 1]
-//         allDifferences.push(a - b)
-//       }
-//       return allDifferences
-//     })
-//     .then(allDifferences => {
-//       for (var i = 0; i < allDifferences.length; i++) {
-//         const diff = allDifferences[i]
-//         expect(diff).toBeGreaterThanOrEqual(debounceDelay)
-//       }
-//       done()
-//     })
-//     .catch(error => {
-//       console.error(error)
-//       expect(false).toBe(true)
-//       done()
-//     })
-// })
+test('filter with forEach', done => {
+  const input = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  const output = [1, 3, 5, 7, 9]
+  pipe.from(input)
+    .filter(item => Math.abs(item % 2) === 1)
+    .forEach(item => {
+      const idx = output.indexOf(item)
+      expect(idx).not.toBe(-1)
+      output.splice(idx, 1)
+    })
+    .then(() => {
+      expect(output.length).toBe(0)
+      done()
+    })
+    .catch(() => {
+      expect(false).toBe(true)
+      done()
+    })
+})
+test('async filter with forEach', done => {
+  const input = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  const output = [1, 3, 5, 7, 9]
+  pipe.from(input)
+    .filter(item => pipe(resolve => {
+      setTimeout(() => { resolve(Math.abs(item % 2) === 1) }, 3)
+    }))
+    .forEach(item => {
+      const idx = output.indexOf(item)
+      expect(idx).not.toBe(-1)
+      output.splice(idx, 1)
+    })
+    .then(() => {
+      expect(output.length).toBe(0)
+      done()
+    })
+    .catch(() => {
+      expect(false).toBe(true)
+      done()
+    })
+})
+test('reduce with resolve', done => {
+  const input = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  pipe.from(input)
+    .reduce((s, n) => s + n, 0)
+    .then(sum => {
+      expect(sum).toBe(45)
+      done()
+    })
+    .catch(() => {
+      expect(false).toBe(true)
+      done()
+    })
+})
+test('async reduce with resolve', done => {
+  const input = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  pipe.from(input)
+    .reduce((s, n) => pipe(resolve => {
+      setTimeout(() => { resolve(s + n) }, 11)
+    }), 0)
+    .then(sum => {
+      expect(sum).toBe(45)
+      done()
+    })
+    .catch(() => {
+      expect(false).toBe(true)
+      done()
+    })
+})
+test('complex streaming with resolve', done => {
+  const inputA = [2, 4, 6, 8, 10]
+  const inputB = [1, 3, 5, 7, 9]
+  let idx = 0
+  pipe.from(inputA)
+    .map(a => ({ a, b: inputB[idx++] }))
+    .map(lit => lit.a * lit.b)
+    .map(aSum => aSum * 10)
+    .map(num => num / 2)
+    .reduce((acc, num) => acc + num, 0)
+    .then(sum => {
+      expect(sum).toBe(950)
+      done()
+    })
+    .catch(() => {
+      expect(false).toBe(true)
+      done()
+    })
+})
+test('buffer', done => {
+  const allDelays = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233]
+  const buffer = pipe.buffer()
+  let counter = 1
+  allDelays.forEach((delay, idx) => {
+    setTimeout(() => {
+      buffer.emit({ counter: counter++ })
+      if ((idx + 1) === allDelays.length) {
+        buffer.resolve()
+      }
+    }, delay)
+  })
+  buffer.pipe
+    .forEach(event => {
+      expect(event.counter <= allDelays.length).toBe(true)
+    })
+    .then(() => {
+      done()
+    })
+    .catch(error => {
+      console.error(error)
+      expect(false).toBe(true)
+      done()
+    })
+})
+test('sized buffer', done => {
+  const allDelays = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233]
+  const buffer = pipe.buffer(5)
+  allDelays.forEach((delay, idx) => {
+    buffer.emit({ delay })
+    if ((idx + 1) === allDelays.length) {
+      buffer.resolve()
+    }
+  })
+  let counter = 0
+  buffer.pipe
+    .forEach(event => counter++)
+    .then(() => {
+      expect(counter).toBe(5)
+      done()
+    })
+    .catch(error => {
+      console.error(error)
+      expect(false).toBe(true)
+      done()
+    })
+})
 // test('wrapping of node callback functions', done => {
 //   function positiveTestFn (arg1, arg2, arg3, callback) {
 //     callback(undefined, arg1 + arg2 + arg3)
