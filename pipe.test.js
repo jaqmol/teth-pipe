@@ -477,6 +477,29 @@ test('sized buffer', done => {
       done()
     })
 })
+test('pipe.event', done => {
+  function receiveSendFn (msg) {
+    let count = 0
+    msg.event
+      .forEach(event => {
+        count++
+        if (count === 100) {
+          expect(true).toBe(true)
+          done()
+        }
+      })
+      .then(() => { // TODO: never get's called, still is needed in this pipe version
+        done()
+      })
+      // TODO: ForEach should start with immediate previousTransition.requestNextMessage
+      //       So that the then like above is not needed
+  }
+  const pattern = { role: 'event' }
+  const eventEmitterFn = pipe.event(receiveSendFn)(pattern)
+  for (var i = 0; i < 100; i++) {
+    eventEmitterFn({ type: 'test', index: i })
+  }
+})
 // test('wrapping of node callback functions', done => {
 //   function positiveTestFn (arg1, arg2, arg3, callback) {
 //     callback(undefined, arg1 + arg2 + arg3)

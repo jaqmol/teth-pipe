@@ -127,6 +127,7 @@ function composeMapTransition (previousTransition, mapCallback) {
   })
 }
 
+// TODO: ForEach should start with immediate previousTransition.requestNextMessage
 function composeForEachTransition (previousTransition, forEachCallback) {
   const baseTransition = composeBaseTransition(previousTransition)
   baseTransition.onMessage((type, value) => {
@@ -380,6 +381,25 @@ pipe.buffer = function (size) {
     pipe: _pipe
   }
   return Object.freeze(composit)
+}
+pipe.event = function (ctxSendFn, basePattern) {
+  if (arguments.length === 1) {
+    return contPattern => pipe.event(ctxSendFn, contPattern)
+  } else if (arguments.length === 2) {
+    let send = e => {
+      const buffer = pipe.buffer()
+      ctxSendFn(Object.assign(
+        {},
+        basePattern,
+        { event: buffer.pipe }
+      ))
+      send = buffer.emit
+      send(e)
+    }
+    return event => { send(event) }
+  } else {
+    throw new Error('Argument(s) missing.')
+  }
 }
 
 pipe.wrap = workerFn => {
