@@ -607,32 +607,96 @@ test('pipe.event', done => {
     eventEmitterFn({ type: 'test', index: i })
   }
 })
-// test('wrapping of node callback functions', done => {
-//   function positiveTestFn (arg1, arg2, arg3, callback) {
-//     callback(undefined, arg1 + arg2 + arg3)
-//   }
-//   function negativeTestFn (arg1, callback) {
-//     callback('TEST-ERROR')
-//   }
-//   const wrappedPositiveTestFn = pipe.wrap(positiveTestFn)
-//   const wrappedNegativeTestFn = pipe.wrap(negativeTestFn)
-//   let count = 0
-//   function doneIfDone () {
-//     count += 1
-//     if (count === 2) done()
-//   }
-//   wrappedPositiveTestFn(1, 3, 5)
-//     .then(result => {
-//       expect(result).toBe(9)
-//       doneIfDone()
-//     })
-//   wrappedNegativeTestFn(9)
-//     .catch(err => {
-//       if (err) {
-//         expect(err).toBe('TEST-ERROR')
-//       } else {
-//         expect(false).toBe(true)
-//       }
-//       doneIfDone()
-//     })
-// })
+test('debounce', done => {
+  const debounceDelay = 10
+  const buffer = pipe.buffer()
+  let emitDelay = 5
+  let emitCount = 0
+  const emittedCollector = []
+  const receivedCollector = []
+  function sendNext () {
+    if (emitCount === 50) emitDelay = 15
+    if (emitCount < 100) {
+      const msg = { timestamp: Date.now() }
+      buffer.emit(msg)
+      if (emitDelay === 15) emittedCollector.push(msg)
+      emitCount += 1
+      setTimeout(sendNext, emitDelay)
+    } else buffer.resolve()
+  }
+  buffer.pipe
+    .debounce(debounceDelay)
+    .forEach(event => {
+      expect(event.timestamp).toBeDefined()
+      receivedCollector.push(event)
+    })
+    .then(() => {
+      expect(receivedCollector).toEqual(emittedCollector)
+      done()
+    })
+    .catch(error => {
+      expect(error).toBe(null)
+      done()
+    })
+  sendNext()
+})
+test('throttle', done => {
+  const throttleDelay = 20
+  const buffer = pipe.buffer()
+  const emitDelay = 10
+  let emitCount = 0
+  const receivedCollector = []
+  function sendNext () {
+    if (emitCount < 50) {
+      const msg = { timestamp: Date.now() }
+      buffer.emit(msg)
+      emitCount += 1
+      setTimeout(sendNext, emitDelay)
+    } else buffer.resolve()
+  }
+  buffer.pipe
+    .throttle(throttleDelay)
+    .forEach(event => {
+      expect(event.timestamp).toBeDefined()
+      receivedCollector.push(event)
+    })
+    .then(() => {
+      expect(receivedCollector.length).toBeLessThan(50)
+      done()
+    })
+    .catch(error => {
+      expect(error).toBe(null)
+      done()
+    })
+  sendNext()
+})
+test('wrapping of node callback functions', done => {
+  const error = new Error('TEST-ERROR')
+  function positiveTestFn (arg1, arg2, arg3, callback) {
+    callback(null, arg1 + arg2 + arg3)
+  }
+  function negativeTestFn (arg1, callback) {
+    callback(error)
+  }
+  const wrappedPositiveTestFn = pipe.wrap(positiveTestFn)
+  const wrappedNegativeTestFn = pipe.wrap(negativeTestFn)
+  let count = 0
+  function doneIfDone () {
+    count += 1
+    if (count === 2) done()
+  }
+  wrappedPositiveTestFn(1, 3, 5)
+    .then(result => {
+      expect(result).toBe(9)
+      doneIfDone()
+    })
+  wrappedNegativeTestFn(9)
+    .catch(err => {
+      if (err) {
+        expect(err).toBe(error)
+      } else {
+        expect(false).toBe(true)
+      }
+      doneIfDone()
+    })
+})

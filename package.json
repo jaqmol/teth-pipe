@@ -1,10 +1,10 @@
 {
   "name": "teth-pipe",
-  "version": "0.8.0",
-  "description": "Backpressure based promise-compatible reactive streaming library.",
+  "version": "1.0.0",
+  "description": "Minimal, functional, monadic, promise-compatible streaming framework with backpressure.",
   "main": "index.js",
   "scripts": {
-    "test": "jest --runInBand"
+    "test": "jest"
   },
   "repository": {
     "type": "git",

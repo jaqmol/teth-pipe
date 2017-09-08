@@ -180,6 +180,90 @@ function composeForEachTransition (previousTransition, forEachCallback) {
   })
 }
 
+function composeDebounceTransition (previousTransition, delay) {
+  const nextMessageDispatch = autoDispatch()
+  const state = {
+    isFinished: false,
+    lastEmitMessage: null,
+    timeout: null
+  }
+  function fire (message) {
+    state.lastEmitMessage = message
+    if (state.timeout) clearTimeout(state.timeout)
+    state.timeout = setTimeout(() => {
+      state.timeout = null
+      nextMessageDispatch.value(state.lastEmitMessage).clear()
+      state.lastEmitMessage = null
+    }, delay)
+  }
+  function expectNext () {
+    if (state.isFinished) return
+    previousTransition.requestNextMessage(message => {
+      if (message.type === EMIT) {
+        fire(message)
+        setTimeout(expectNext, 0)
+      } else if (message.type === TRANSITION) {
+        previousTransition = message.value
+        setTimeout(expectNext, 0)
+      } else if (message.type === CONTINUE) {
+        setTimeout(expectNext, 0)
+      } else if (message.type === RESOLVE) {
+        nextMessageDispatch.value(message).clear()
+        state.isFinished = true
+      } else {
+        nextMessageDispatch.value(message).clear()
+      }
+    })
+  }
+  expectNext()
+  return Object.freeze({
+    requestNextMessage: nextMessageCallback => {
+      nextMessageDispatch.callback(nextMessageCallback)
+    }
+  })
+}
+
+function composeThrottleTransition (previousTransition, delay) {
+  const nextMessageDispatch = autoDispatch()
+  const state = {
+    isFinished: false,
+    lastEmitMessage: null,
+    interval: null
+  }
+  state.interval = setInterval(() => {
+    if (state.lastEmitMessage) {
+      nextMessageDispatch.value(state.lastEmitMessage).clear()
+      state.lastEmitMessage = null
+    }
+  }, delay)
+  function expectNext () {
+    if (state.isFinished) return
+    previousTransition.requestNextMessage(message => {
+      if (message.type === EMIT) {
+        state.lastEmitMessage = message
+        setTimeout(expectNext, 0)
+      } else if (message.type === TRANSITION) {
+        previousTransition = message.value
+        setTimeout(expectNext, 0)
+      } else if (message.type === CONTINUE) {
+        setTimeout(expectNext, 0)
+      } else if (message.type === RESOLVE) {
+        if (state.interval) clearInterval(state.interval)
+        nextMessageDispatch.value(message).clear()
+        state.isFinished = true
+      } else {
+        nextMessageDispatch.value(message).clear()
+      }
+    })
+  }
+  expectNext()
+  return Object.freeze({
+    requestNextMessage: nextMessageCallback => {
+      nextMessageDispatch.callback(nextMessageCallback)
+    }
+  })
+}
+
 function composeThenTransition (previousTransition, thenCallback) {
   const nextMessageDispatch = autoDispatch()
   const state = { isFinished: false }
@@ -279,6 +363,8 @@ function pipe (generateFn) {
     filter: composeOperatorFn(composeFilterTransition),
     map: composeOperatorFn(composeMapTransition),
     forEach: composeOperatorFn(composeForEachTransition),
+    debounce: composeOperatorFn(composeDebounceTransition),
+    throttle: composeOperatorFn(composeThrottleTransition),
     then: composeOperatorFn(composeThenTransition),
     catch: catchCallback => {
       composeCatchTransition(previousTransition, catchCallback)
