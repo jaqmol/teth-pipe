@@ -1,19 +1,35 @@
 {
   "name": "teth-pipe",
-  "version": "0.7.0",
-  "description": "Promise-compatible map-reduce streaming lib",
+  "version": "0.8.0",
+  "description": "Backpressure based promise-compatible reactive streaming library.",
   "main": "index.js",
   "scripts": {
     "test": "jest --runInBand"
   },
   "repository": {
     "type": "git",
-    "url": "http://git"
+    "url": "https://github.com/jaqmol/teth-pipe.git"
   },
   "keywords": [
-    "Promise",
-    "streaming",
-    "reactive"
+    "promise",
+    "deferred",
+    "reactive",
+    "stream",
+    "backpressure",
+    "then",
+    "catch",
+    "map",
+    "reduce",
+    "filter",
+    "forEach",
+    "resolve",
+    "reject",
+    "all",
+    "race",
+    "from",
+    "buffer",
+    "event",
+    "wrap"
   ],
   "author": "Ronnny Reichmann",
   "license": "MIT",

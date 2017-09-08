@@ -67,12 +67,12 @@ test('pipe error', done => {
       done()
     })
 })
-test('then return pipe', done => {
+test('then return pipe and Promise', done => {
   pipe(resolve => { resolve(1) })
     .then(result => pipe(resolve => {
       setTimeout(() => { resolve(result + 1) }, 11)
     }))
-    .then(result => pipe(resolve => {
+    .then(result => new Promise(resolve => {
       setTimeout(() => { resolve(result + 2) }, 22)
     }))
     .then(result => pipe(resolve => {
@@ -225,6 +225,117 @@ test('from iterable and forEach', done => {
     .catch(e => {
       console.error(e)
       expect(false).toBe(true)
+      done()
+    })
+})
+test('reduce from inner pipe', done => {
+  const iterable = [1, 2, 3, 4, 5, 6, 7]
+  let firstSum
+  pipe.from(iterable)
+    .reduce((acc, num) => acc + num, 0)
+    .then(sum => {
+      firstSum = sum
+      return pipe.from(iterable)
+    })
+    .reduce((acc, num) => acc + num, 0)
+    .then(sum => {
+      return [firstSum, sum]
+    })
+    .then(results => {
+      expect(results[0]).toBe(results[1])
+      done()
+    })
+    .catch(e => {
+      console.error(e)
+      expect(e).toBe(null)
+      done()
+    })
+})
+test('map from inner pipe', done => {
+  const iterable = [1, 2, 3, 4, 5, 6, 7]
+  let sum
+  pipe.from(iterable)
+    .reduce((acc, num) => acc + num, 0)
+    .then(result => {
+      sum = result
+      return pipe.from(iterable)
+    })
+    .map(num => num * sum)
+    .reduce((acc, result) => result, 0)
+    .then(result => {
+      expect(result).toBe(196)
+      done()
+    })
+    .catch(e => {
+      console.error(e)
+      expect(e).toBe(null)
+      done()
+    })
+})
+test('filter from inner pipe', done => {
+  const iterable = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21]
+  const oddsOnly = iterable.filter(num => num % 2)
+  pipe.from(iterable)
+    .reduce((acc, num) => acc + num, 0)
+    .then(() => pipe.from(iterable))
+    .filter(num => num % 2)
+    .reduce((acc, num) => acc.concat([num]), [])
+    .then(result => {
+      expect(result).toEqual(oddsOnly)
+      done()
+    })
+    .catch(e => {
+      console.error(e)
+      expect(e).toBe(null)
+      done()
+    })
+})
+test('forEach from inner pipe', done => {
+  const iterable = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21]
+  const collector = []
+  pipe.from(iterable)
+    .reduce((acc, num) => acc + num, 0)
+    .then(() => pipe.from(iterable))
+    .forEach(num => { collector.push(num) })
+    .then(() => {
+      expect(collector).toEqual(iterable)
+      done()
+    })
+    .catch(e => {
+      console.error(e)
+      expect(e).toBe(null)
+      done()
+    })
+})
+test('reduce from filter', done => {
+  const iterable = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21]
+  const oddsOnly = iterable.filter(num => num % 2)
+  pipe.from(iterable)
+    .filter(num => num % 2)
+    .reduce((acc, num) => acc.concat([num]), [])
+    .then(results => {
+      expect(results).toEqual(oddsOnly)
+      done()
+    })
+    .catch(e => {
+      console.error(e)
+      expect(e).toBe(null)
+      done()
+    })
+})
+test('reduce from map', done => {
+  const iterable = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21]
+  const multitudes = iterable.map(num => num * 10)
+  pipe.from(iterable)
+    .map(num => num * 10)
+    .reduce((acc, num) => acc.concat([num]), [])
+    .then(results => {
+      expect(results).toEqual(multitudes)
+      done()
+    })
+    .catch(e => {
+      console.error(e)
+      expect(e).toBe(null)
       done()
     })
 })
@@ -387,6 +498,7 @@ test('reduce with resolve', done => {
   const input = [1, 2, 3, 4, 5, 6, 7, 8, 9]
   pipe.from(input)
     .reduce((s, n) => s + n, 0)
+    // .forEach(sum => sum)
     .then(sum => {
       expect(sum).toBe(45)
       done()
@@ -488,11 +600,6 @@ test('pipe.event', done => {
           done()
         }
       })
-      .then(() => { // TODO: never get's called, still is needed in this pipe version
-        done()
-      })
-      // TODO: ForEach should start with immediate previousTransition.requestNextMessage
-      //       So that the then like above is not needed
   }
   const pattern = { role: 'event' }
   const eventEmitterFn = pipe.event(receiveSendFn)(pattern)

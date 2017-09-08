@@ -1,218 +1,254 @@
 /* Copyright 2017 Ronny Reichmann */
 /* PIPE, minimal, functional, monadic, promise-compatible streaming framework with backpressure. */
 
+const EMIT = Symbol('EMIT')
+const RESOLVE = Symbol('RESOLVE')
+const REJECT = Symbol('REJECT')
+const CONTINUE = Symbol('CONTINUE')
+const TRANSITION = Symbol('TRANSITION')
+const NXT_MSG_CB = Symbol('NXT_MSG_CB')
+
 function resolveResult (result, successCb, errorCb) {
   if (result && result.then && result.catch) {
     result.then(successCb).catch(errorCb)
   } else successCb(result)
 }
 
-function composeBaseTransition (previousTransition) {
-  let _nextMessage, _nextMessageCallback, _onMessageCallback, _onDispatchFinished
-  let _isDeferred = true
-  function dispatch () {
-    if (_nextMessage && _nextMessageCallback) {
-      _nextMessageCallback(_nextMessage)
-      _nextMessage = null
-      if (_onDispatchFinished) {
-        _onDispatchFinished()
-        _onDispatchFinished = null
-      }
-    }
+function errorHandler (nextMessageDispatch, state) {
+  return error => {
+    nextMessageDispatch.value({ type: REJECT, value: error })
+    state.isFinished = true
   }
-  function expectNext () {
-    if (_isDeferred) {
-      previousTransition.requestNextMessage(message => {
-        _onMessageCallback(message.type, message.value)
-        if (message.type === 'resolve') _isDeferred = false
-        else if (message.type === 'reject') _isDeferred = false
-      })
-    }
+}
+
+function autoDispatch () {
+  let callback, callbackIsSet, value, valueIsSet
+  function clear () {
+    callback = null
+    callbackIsSet = false
+    value = null
+    valueIsSet = false
+  }
+  clear()
+  function resolve () {
+    if (callbackIsSet && valueIsSet) callback(value)
   }
   const composit = {
-    onMessage: callback => {
-      _onMessageCallback = callback
+    callback: dispatchCallback => {
+      callback = dispatchCallback
+      callbackIsSet = true
+      resolve()
+      return composit
     },
-    expectNext: () => {
-      setTimeout(expectNext, 0)
+    value: dispatchValue => {
+      value = dispatchValue
+      valueIsSet = true
+      resolve()
+      return composit
     },
-    nextDispatch: (nextMessage, finishedCb) => {
-      _nextMessage = nextMessage
-      dispatch()
-      _onDispatchFinished = finishedCb
-    },
-    requestNextMessage: nextMessageCallback => {
-      _nextMessageCallback = nextMessageCallback
-      expectNext()
-      dispatch()
-    }
+    clear
   }
   return Object.freeze(composit)
 }
 
 function composeReduceTransition (previousTransition, reduceCallback, initialAccumulator) {
+  const nextMessageDispatch = autoDispatch()
+  const state = { isFinished: false }
   let accumulator = initialAccumulator
-  const baseTransition = composeBaseTransition(previousTransition)
-  baseTransition.onMessage((type, value) => {
-    if (type === 'emit') {
-      try {
-        const result = reduceCallback(accumulator, value)
-        resolveResult(result, nextAccumulator => {
-          accumulator = nextAccumulator
-          baseTransition.expectNext()
-        }, error => {
-          baseTransition.nextDispatch({ type: 'reject', value: error })
-        })
-      } catch (error) {
-        baseTransition.nextDispatch({ type: 'reject', value: error })
+  function expectNext () {
+    if (state.isFinished) return
+    previousTransition.requestNextMessage(message => {
+      if (message.type === EMIT) {
+        try {
+          const result = reduceCallback(accumulator, message.value)
+          resolveResult(result, nextAccumulator => {
+            accumulator = nextAccumulator
+            nextMessageDispatch.value({ type: CONTINUE }).clear()
+          }, errorHandler(nextMessageDispatch, state))
+        } catch (error) {
+          errorHandler(nextMessageDispatch, state)(error)
+        }
+      } else if (message.type === TRANSITION) {
+        previousTransition = message.value
+        nextMessageDispatch.value({ type: CONTINUE }).clear()
+      } else if (message.type === RESOLVE) {
+        nextMessageDispatch.value({ type: RESOLVE, value: accumulator }).clear()
+      } else {
+        nextMessageDispatch.value(message).clear()
       }
-    } else if (type === 'resolve') {
-      baseTransition.nextDispatch({ type: 'resolve', value: accumulator })
-    } else {
-      baseTransition.nextDispatch({ type, value })
-    }
-  })
+    })
+  }
   return Object.freeze({
-    requestNextMessage: baseTransition.requestNextMessage
+    requestNextMessage: nextMessageCallback => {
+      nextMessageDispatch.callback(nextMessageCallback)
+      expectNext()
+    }
   })
 }
 
-function composeFilterTransition (previousTransition, filterCallback) {
-  const baseTransition = composeBaseTransition(previousTransition)
-  baseTransition.onMessage((type, value) => {
-    if (type === 'emit') {
-      try {
-        const result = filterCallback(value)
-        resolveResult(result, dispatchMessage => {
-          if (dispatchMessage) {
-            baseTransition.nextDispatch({ type, value }, baseTransition.expectNext)
-          } else {
-            baseTransition.expectNext()
-          }
-        }, error => {
-          baseTransition.nextDispatch({ type: 'reject', value: error })
-        })
-      } catch (error) {
-        baseTransition.nextDispatch({ type: 'reject', value: error })
+function composeFilterTransition (previousTransition, mapCallback) {
+  const nextMessageDispatch = autoDispatch()
+  const state = { isFinished: false }
+  function expectNext () {
+    if (state.isFinished) return
+    previousTransition.requestNextMessage(message => {
+      if (message.type === EMIT) {
+        try {
+          const result = mapCallback(message.value)
+          resolveResult(result, dispatchMessage => {
+            if (dispatchMessage) {
+              nextMessageDispatch.value(message).clear()
+            } else {
+              nextMessageDispatch.value({ type: CONTINUE }).clear()
+            }
+          }, errorHandler(nextMessageDispatch, state))
+        } catch (error) {
+          errorHandler(nextMessageDispatch, state)(error)
+        }
+      } else if (message.type === TRANSITION) {
+        previousTransition = message.value
+        nextMessageDispatch.value({ type: CONTINUE }).clear()
+      } else {
+        nextMessageDispatch.value(message).clear()
       }
-    } else {
-      baseTransition.nextDispatch({ type, value })
-    }
-  })
+    })
+  }
   return Object.freeze({
-    requestNextMessage: baseTransition.requestNextMessage
+    requestNextMessage: nextMessageCallback => {
+      nextMessageDispatch.callback(nextMessageCallback)
+      expectNext()
+    }
   })
 }
 
 function composeMapTransition (previousTransition, mapCallback) {
-  const baseTransition = composeBaseTransition(previousTransition)
-  baseTransition.onMessage((type, value) => {
-    if (type === 'emit') {
-      try {
-        const result = mapCallback(value)
-        resolveResult(result, value => {
-          baseTransition.nextDispatch({ type: 'emit', value }, baseTransition.expectNext)
-        }, error => {
-          baseTransition.nextDispatch({ type: 'reject', value: error })
-        })
-      } catch (error) {
-        baseTransition.nextDispatch({ type: 'reject', value: error })
+  const nextMessageDispatch = autoDispatch()
+  const state = { isFinished: false }
+  function expectNext () {
+    if (state.isFinished) return
+    previousTransition.requestNextMessage(message => {
+      if (message.type === EMIT) {
+        try {
+          const result = mapCallback(message.value)
+          resolveResult(result, value => {
+            nextMessageDispatch.value({ type: EMIT, value }).clear()
+          }, errorHandler(nextMessageDispatch, state))
+        } catch (error) {
+          errorHandler(nextMessageDispatch, state)(error)
+        }
+      } else if (message.type === TRANSITION) {
+        previousTransition = message.value
+        nextMessageDispatch.value({ type: CONTINUE }).clear()
+      } else {
+        nextMessageDispatch.value(message).clear()
       }
-    } else {
-      baseTransition.nextDispatch({ type, value })
-    }
-  })
+    })
+  }
   return Object.freeze({
-    requestNextMessage: baseTransition.requestNextMessage
+    requestNextMessage: nextMessageCallback => {
+      nextMessageDispatch.callback(nextMessageCallback)
+      expectNext()
+    }
   })
 }
 
-// TODO: ForEach should start with immediate previousTransition.requestNextMessage
 function composeForEachTransition (previousTransition, forEachCallback) {
-  const baseTransition = composeBaseTransition(previousTransition)
-  baseTransition.onMessage((type, value) => {
-    if (type === 'emit') {
-      forEachCallback(value)
-      baseTransition.expectNext()
-    } else if (type === 'resolve') {
-      baseTransition.nextDispatch({ type, value })
-    } else {
-      baseTransition.nextDispatch({ type, value })
-    }
-  })
+  const nextMessageDispatch = autoDispatch()
+  const state = { isFinished: false }
+  function expectNext () {
+    if (state.isFinished) return
+    previousTransition.requestNextMessage(message => {
+      if (message.type === EMIT) {
+        forEachCallback(message.value)
+        setTimeout(expectNext, 0)
+      } else if (message.type === TRANSITION) {
+        previousTransition = message.value
+        setTimeout(expectNext, 0)
+      } else if (message.type === CONTINUE) {
+        setTimeout(expectNext, 0)
+      } else {
+        nextMessageDispatch.value(message).clear()
+        state.isFinished = true
+      }
+    })
+  }
+  expectNext()
   return Object.freeze({
-    requestNextMessage: baseTransition.requestNextMessage
+    requestNextMessage: nextMessageCallback => {
+      nextMessageDispatch.callback(nextMessageCallback)
+    }
   })
 }
 
 function composeThenTransition (previousTransition, thenCallback) {
-  let _nextMessage, _nextMessageCallback
-  function dispatch () {
-    if (_nextMessage && _nextMessageCallback) {
-      _nextMessageCallback(_nextMessage)
-      _nextMessage = null
-    }
-  }
-  previousTransition.requestNextMessage(message => {
-    if (message.type === 'resolve') {
-      try {
-        const result = thenCallback(message.value)
-        resolveResult(result, value => {
-          _nextMessage = { type: 'resolve', value }
-          dispatch()
-        }, error => {
-          _nextMessage = { type: 'reject', value: error }
-          dispatch()
-        })
-      } catch (error) {
-        _nextMessage = { type: 'reject', value: error }
-        dispatch()
+  const nextMessageDispatch = autoDispatch()
+  const state = { isFinished: false }
+  function expectNext () {
+    if (state.isFinished) return
+    previousTransition.requestNextMessage(message => {
+      if (message.type === RESOLVE) {
+        try {
+          const result = thenCallback(message.value)
+          if (result && result[NXT_MSG_CB]) {
+            const transition = { requestNextMessage: result[NXT_MSG_CB] }
+            nextMessageDispatch.value({ type: TRANSITION, value: transition })
+          } else {
+            resolveResult(result, value => {
+              nextMessageDispatch.value({ type: RESOLVE, value })
+            }, errorHandler(nextMessageDispatch, state))
+          }
+        } catch (error) {
+          errorHandler(nextMessageDispatch, state)(error)
+        }
+      } else if (message.type === TRANSITION) {
+        previousTransition = message.value
+        setTimeout(expectNext, 0)
+      } else if (message.type === CONTINUE) {
+        setTimeout(expectNext, 0)
+      } else {
+        nextMessageDispatch.value(message)
       }
-    } else {
-      _nextMessage = message
-      dispatch()
+    })
+  }
+  expectNext()
+  return Object.freeze({
+    requestNextMessage: nextMessageCallback => {
+      nextMessageDispatch.callback(nextMessageCallback)
     }
   })
-  const composit = {
-    requestNextMessage: nextMessageCallback => {
-      _nextMessageCallback = nextMessageCallback
-      dispatch()
-    }
-  }
-  return Object.freeze(composit)
 }
 
 function composeCatchTransition (previousTransition, catchCallback) {
   previousTransition.requestNextMessage(message => {
-    if (message.type === 'reject') {
+    if (message.type === REJECT) {
       catchCallback(message.value)
     }
   })
 }
 
 function composeGenerateTransition (generateFn) {
-  let _nextMessage, _nextMessageCallback
+  let nextMessage, nextMessageCb
   function dispatch () {
-    if (_nextMessage && _nextMessageCallback) {
-      _nextMessageCallback(_nextMessage)
-      _nextMessage = null
+    if (nextMessage && nextMessageCb) {
+      nextMessageCb(nextMessage)
+      nextMessage = null
     }
   }
   let perform = () => {
     const emitFn = generateFn(
       value => {
-        _nextMessage = { type: 'resolve', value }
+        nextMessage = { type: RESOLVE, value }
         dispatch()
       },
       error => {
-        _nextMessage = { type: 'reject', value: error }
+        nextMessage = { type: REJECT, value: error }
         dispatch()
       }
     )
     if (emitFn) {
       perform = () => {
         emitFn(value => {
-          _nextMessage = { type: 'emit', value }
+          nextMessage = { type: EMIT, value }
           dispatch()
         })
       }
@@ -222,7 +258,7 @@ function composeGenerateTransition (generateFn) {
   const composit = {
     requestNextMessage: nextMessageCallback => {
       perform()
-      _nextMessageCallback = nextMessageCallback
+      nextMessageCb = nextMessageCallback
       dispatch()
     }
   }
@@ -233,10 +269,12 @@ function pipe (generateFn) {
   if (generateFn) return pipe(undefined, composeGenerateTransition(generateFn))
   const previousTransition = arguments[1]
   function composeOperatorFn (composeTransition) {
-    return (callback, addition) => pipe(undefined, composeTransition(
-      previousTransition, callback, addition))
+    return (callback, addition) => {
+      return pipe(undefined, composeTransition(previousTransition, callback, addition))
+    }
   }
   const composit = {
+    [NXT_MSG_CB]: previousTransition.requestNextMessage,
     reduce: composeOperatorFn(composeReduceTransition),
     filter: composeOperatorFn(composeFilterTransition),
     map: composeOperatorFn(composeMapTransition),
@@ -324,16 +362,16 @@ pipe.buffer = function (size) {
   function handleNextMessage () {
     if (messageBuffer.length === 0) return
     const msg = messageBuffer[0]
-    if (msg.type === 'emit') {
+    if (msg.type === EMIT) {
       if (emitCallback) {
         messageBuffer.splice(0, 1)
         emitCallback(msg.value)
         emitCallback = null
       }
-    } else if (msg.type === 'resolve') {
+    } else if (msg.type === RESOLVE) {
       messageBuffer.splice(0, 1)
       resolveCallback(msg.value)
-    } else if (msg.type === 'reject') {
+    } else if (msg.type === REJECT) {
       messageBuffer.splice(0, 1)
       rejectCallback(msg.value)
     }
@@ -344,7 +382,7 @@ pipe.buffer = function (size) {
     workBuffer.reverse()
     let count = 0
     workBuffer = workBuffer.filter(msg => {
-      if (msg.type === 'emit') {
+      if (msg.type === EMIT) {
         if (count < size) {
           count += 1
           return true
@@ -364,17 +402,17 @@ pipe.buffer = function (size) {
   })
   const composit = {
     emit: value => {
-      messageBuffer.push({ type: 'emit', value })
+      messageBuffer.push({ type: EMIT, value })
       resizeMessageBuffer()
       handleNextMessage()
     },
     resolve: value => {
-      messageBuffer.push({ type: 'resolve', value })
+      messageBuffer.push({ type: RESOLVE, value })
       resizeMessageBuffer()
       handleNextMessage()
     },
     reject: value => {
-      messageBuffer.push({ type: 'reject', value })
+      messageBuffer.push({ type: REJECT, value })
       resizeMessageBuffer()
       handleNextMessage()
     },
