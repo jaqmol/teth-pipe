@@ -1,6 +1,6 @@
 {
   "name": "teth-pipe",
-  "version": "1.0.2",
+  "version": "1.0.5",
   "description": "Minimal, functional, monadic, promise-compatible streaming framework with backpressure.",
   "main": "pipe.js",
   "scripts": {

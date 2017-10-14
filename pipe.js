@@ -6,7 +6,7 @@ const RESOLVE = Symbol('RESOLVE')
 const REJECT = Symbol('REJECT')
 const CONTINUE = Symbol('CONTINUE')
 const TRANSITION = Symbol('TRANSITION')
-const NXT_MSG_CB = Symbol('NXT_MSG_CB')
+const NXT_MSG_CB = Symbol.for('NXT_MSG_CB')
 
 function resolveResult (result, successCb, errorCb) {
   if (result && result.then && result.catch) {
