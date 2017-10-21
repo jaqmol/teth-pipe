@@ -339,6 +339,32 @@ test('reduce from map', done => {
       done()
     })
 })
+test('reject fall-throught', done => {
+  const iterable = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21]
+  const e = new Error('Reject Error')
+  const composeGenerator = () => {
+    return (resolve, reject) => {
+      let idx = 0
+      return next => {
+        const n = iterable[idx++]
+        next(n)
+        if (idx === iterable.length) reject(e)
+      }
+    }
+  }
+  pipe(composeGenerator())
+    .map(num => num + 10)
+    .filter(num => num % 2)
+    .forEach(num => {})
+    .then(count => {
+      expect(false).toBe(true)
+      done()
+    })
+    .catch(err => {
+      expect(err).toBe(e)
+      done()
+    })
+})
 test('async emit next and forEach', done => {
   const allItems = [1, 2, 3, 4, 5, 6, 7]
   function asyncPush (resolve, reject) {
@@ -624,33 +650,33 @@ test('debounce', done => {
 })
 test('throttle', done => {
   const throttleDelay = 20
-  const buffer = pipe.buffer()
   const emitDelay = 10
-  let emitCount = 0
   const receivedCollector = []
-  function sendNext () {
-    if (emitCount < 50) {
-      const msg = { timestamp: Date.now() }
-      buffer.emit(msg)
-      emitCount += 1
-      setTimeout(sendNext, emitDelay)
-    } else buffer.resolve()
+  function generate (resolve, reject) {
+    let count = 0
+    return next => {
+      if (count < 50) {
+        setTimeout(() => {
+          next({ stamp: Date.now() })
+          count += 1
+        }, emitDelay)
+      } else resolve(count)
+    }
   }
-  buffer.pipe
+  pipe(generate)
     .throttle(throttleDelay)
     .forEach(event => {
-      expect(event.timestamp).toBeDefined()
+      expect(event.stamp).toBeDefined()
       receivedCollector.push(event)
     })
-    .then(() => {
-      expect(receivedCollector.length).toBeLessThan(50)
+    .then(sentCount => {
+      expect(receivedCollector.length).toBeLessThan(sentCount)
       done()
     })
     .catch(error => {
       expect(error).toBe(null)
       done()
     })
-  sendNext()
 })
 test('wrapping of node callback functions', done => {
   const error = new Error('TEST-ERROR')

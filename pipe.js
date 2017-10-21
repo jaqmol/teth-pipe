@@ -74,7 +74,7 @@ function composeReduceTransition (previousTransition, reduceCallback, initialAcc
       } else if (message.type === RESOLVE) {
         nextMessageDispatch.value({ type: RESOLVE, value: accumulator }).clear()
       } else {
-        nextMessageDispatch.value(message).clear()
+        nextMessageDispatch.value(message)
       }
     })
   }
@@ -109,7 +109,7 @@ function composeFilterTransition (previousTransition, mapCallback) {
         previousTransition = message.value
         nextMessageDispatch.value({ type: CONTINUE }).clear()
       } else {
-        nextMessageDispatch.value(message).clear()
+        nextMessageDispatch.value(message)
       }
     })
   }
@@ -140,7 +140,7 @@ function composeMapTransition (previousTransition, mapCallback) {
         previousTransition = message.value
         nextMessageDispatch.value({ type: CONTINUE }).clear()
       } else {
-        nextMessageDispatch.value(message).clear()
+        nextMessageDispatch.value(message)
       }
     })
   }
@@ -167,8 +167,7 @@ function composeForEachTransition (previousTransition, forEachCallback) {
       } else if (message.type === CONTINUE) {
         setTimeout(expectNext, 0)
       } else {
-        nextMessageDispatch.value(message).clear()
-        state.isFinished = true
+        nextMessageDispatch.value(message)
       }
     })
   }
@@ -211,7 +210,7 @@ function composeDebounceTransition (previousTransition, delay) {
         nextMessageDispatch.value(message).clear()
         state.isFinished = true
       } else {
-        nextMessageDispatch.value(message).clear()
+        nextMessageDispatch.value(message)
       }
     })
   }
@@ -252,7 +251,7 @@ function composeThrottleTransition (previousTransition, delay) {
         nextMessageDispatch.value(message).clear()
         state.isFinished = true
       } else {
-        nextMessageDispatch.value(message).clear()
+        nextMessageDispatch.value(message)
       }
     })
   }
@@ -441,8 +440,7 @@ pipe.from = collection => {
 }
 
 pipe.buffer = function (size) {
-  size = arguments.length === 0 ? Infinity : size
-  size = size <= 0 ? 1 : size
+  size = size || 100
   let resolveCallback, rejectCallback, emitCallback
   let messageBuffer = []
   function handleNextMessage () {
@@ -463,11 +461,9 @@ pipe.buffer = function (size) {
     }
   }
   function resizeMessageBuffer () {
-    if (size === Infinity) return
-    let workBuffer = [].concat(messageBuffer)
-    workBuffer.reverse()
+    messageBuffer.reverse()
     let count = 0
-    workBuffer = workBuffer.filter(msg => {
+    messageBuffer = messageBuffer.filter(msg => {
       if (msg.type === EMIT) {
         if (count < size) {
           count += 1
@@ -475,8 +471,7 @@ pipe.buffer = function (size) {
         } else return false
       } else return true
     })
-    workBuffer.reverse()
-    messageBuffer = workBuffer
+    messageBuffer.reverse()
   }
   const _pipe = pipe((resolve, reject) => {
     resolveCallback = resolve
