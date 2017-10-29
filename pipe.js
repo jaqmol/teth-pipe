@@ -379,6 +379,7 @@ pipe.reject = error => {
   return pipe((resolve, reject) => { reject(error) })
 }
 pipe.all = allItems => {
+  if (!allItems.length) return pipe.resolve(allItems)
   return pipe((resolve, reject) => {
     const acc = []
     const length = allItems.length
@@ -406,6 +407,7 @@ pipe.all = allItems => {
   })
 }
 pipe.race = allItems => {
+  if (!allItems.length) return pipe.resolve(allItems)
   return pipe((resolve, reject) => {
     let value, error
     const composeThenFn = () => val => {
